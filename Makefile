@@ -15,5 +15,10 @@ image: go.mod go.sum main.go Dockerfile
 	 $(IMAGE_BUILDER) tag $(IMAGE_NAME):latest $(IMAGE_NAME):$(.GIT_COMMIT)
 	 $(IMAGE_BUILDER) tag $(IMAGE_NAME):latest $(IMAGE_NAME):$(.GIT_VERSION)
 
+push: image
+	$(IMAGE_BUILDER) push $(IMAGE_NAME):latest
+	$(IMAGE_BUILDER) push $(IMAGE_NAME):$(.GIT_COMMIT)
+	$(IMAGE_BUILDER) push $(IMAGE_NAME):$(.GIT_VERSION)
+
 $(GOPATH)/bin/sha3: go.mod go.sum main.go
 	@go install -v
