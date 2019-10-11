@@ -22,6 +22,7 @@ var (
 	outputLength = pflag.IntP("length", "l", 32, "output length in bytes if using a shake hash")
 	help         = pflag.BoolP("help", "h", false, "show usage info")
 	check        = pflag.BoolP("check", "c", false, "check sum files")
+	workers      = pflag.IntP("workers", "w", 8, "number of workers for recursive hashing")
 )
 
 func main() {
@@ -42,24 +43,14 @@ func main() {
 				logrus.Fatal(err)
 			}
 		} else {
-			hashAndPrint := func(path string) error {
-				hash, err := hashFile(path, *hashType, *outputLength)
-				if err != nil {
-					return err
-				}
-				fmt.Printf("%x  %s\n", hash, path)
-				return nil
-			}
 			if info, err := os.Stat(arg); err == nil && info.IsDir() {
-				err = forAllFiles(arg, hashAndPrint)
-				if err != nil {
-					logrus.Fatal(err)
-				}
+				hashDirectory(arg)
 			} else {
-				err = hashAndPrint(arg)
+				hash, err := hashFile(arg, *hashType, *outputLength)
 				if err != nil {
 					logrus.Fatal(err)
 				}
+				fmt.Printf("%x  %s\n", hash, arg)
 			}
 		}
 	}
@@ -68,7 +59,7 @@ func main() {
 func hashFile(file string, hashType string, outputLength int) ([]byte, error) {
 	f, err := os.Open(file)
 	if err != nil {
-		logrus.Fatal(err)
+		return nil, err
 	}
 	defer f.Close()
 	switch hashType {
@@ -173,4 +164,60 @@ func forAllFiles(dir string, fn func(path string) error) error {
 		}
 		return nil
 	})
+}
+
+func hashDirectory(dir string) {
+	pathes := make(chan string, 512)
+	printerInput := make(chan string, 512)
+
+	// produce pathes
+	go func() {
+		defer close(pathes)
+		err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+			if err != nil {
+				logrus.Warn(err)
+				return nil
+			}
+			if !info.IsDir() {
+				pathes <- path
+			}
+			return nil
+		})
+		if err != nil {
+			logrus.Error(err)
+		}
+	}()
+
+	// consume pathes in hash workers
+	hashWorkerCount := *workers
+	done := make(chan struct{}, hashWorkerCount)
+	for i := 0; i < hashWorkerCount; i++ {
+		go func() {
+			hashWorker(pathes, printerInput)
+			done <- struct{}{}
+		}()
+	}
+	// wait for them and close the printerInput afterwards
+	go func() {
+		for i := 0; i < hashWorkerCount; i++ {
+			<-done
+		}
+		close(printerInput)
+	}()
+
+	// consume the printer input
+	for line := range printerInput {
+		fmt.Println(line)
+	}
+}
+
+func hashWorker(in <-chan string, out chan<- string) {
+	for path := range in {
+		hash, err := hashFile(path, *hashType, *outputLength)
+		if err != nil {
+			logrus.Warn(err)
+			continue
+		}
+		out <- fmt.Sprintf("%x  %s", hash, path)
+	}
 }
